@@ -1,3 +1,41 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTO-INSTALL — runs only when a package is missing.
+# On Streamlit Cloud this block is skipped because requirements.txt
+# already installs everything before the app starts.
+# When running locally without a venv it acts as a safety net.
+# ─────────────────────────────────────────────────────────────────────────────
+import importlib
+import subprocess
+import sys
+
+REQUIRED_PACKAGES = {
+    "nltk":         "nltk>=3.8.1",
+    "sklearn":      "scikit-learn>=1.4.0",
+    "matplotlib":   "matplotlib>=3.8.0",
+    "seaborn":      "seaborn>=0.13.0",
+    "pandas":       "pandas>=2.0.0",
+    "numpy":        "numpy>=1.26.0",
+    "pyarrow":      "pyarrow>=15.0.0",
+}
+
+_missing = [
+    pip_name
+    for import_name, pip_name in REQUIRED_PACKAGES.items()
+    if importlib.util.find_spec(import_name) is None
+]
+
+if _missing:
+    import streamlit as st
+    with st.spinner(f"Installing missing packages: {', '.join(_missing)} …"):
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--quiet"] + _missing
+        )
+    st.success("Packages installed — reloading app…")
+    st.rerun()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN IMPORTS (safe to import after the block above)
+# ─────────────────────────────────────────────────────────────────────────────
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,24 +46,27 @@ from nltk.stem import PorterStemmer
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.model_selection import train_test_split
 from sklearn.naive_bayes import BernoulliNB
-from sklearn.metrics import (
-    accuracy_score, classification_report, confusion_matrix
-)
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# ── NLTK downloads ───────────────────────────────────────────────────────────
-nltk.download("stopwords", quiet=True)
-nltk.download("punkt", quiet=True)
+# ── NLTK data downloads ───────────────────────────────────────────────────────
+# On Streamlit Cloud these download to a writable temp directory automatically.
+for _corpus in ("stopwords", "punkt", "punkt_tab"):
+    try:
+        nltk.data.find(f"tokenizers/{_corpus}" if _corpus.startswith("punkt")
+                       else f"corpora/{_corpus}")
+    except LookupError:
+        nltk.download(_corpus, quiet=True)
 
-# ── Page config ──────────────────────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="IMDB Sentiment Analyzer",
     page_icon="🎬",
     layout="wide",
 )
 
-# ── Custom CSS ───────────────────────────────────────────────────────────────
+# ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .main-header {
@@ -96,15 +137,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── NLP helpers ───────────────────────────────────────────────────────────────
 ps = PorterStemmer()
 STOP_WORDS = set(stopwords.words("english"))
 
 
 def clean_text(text: str) -> str:
-    """Remove HTML tags, non-alpha chars, lowercase, stem, remove stopwords."""
-    text = re.sub(r"<.*?>", " ", str(text))      # strip HTML
-    text = re.sub(r"[^a-zA-Z]", " ", text)       # keep letters only
+    """Strip HTML, remove non-alpha chars, lowercase, stem, drop stopwords."""
+    text = re.sub(r"<.*?>", " ", str(text))
+    text = re.sub(r"[^a-zA-Z]", " ", text)
     text = text.lower()
     tokens = text.split()
     tokens = [ps.stem(w) for w in tokens if w not in STOP_WORDS]
@@ -115,17 +156,16 @@ def clean_text(text: str) -> str:
 def preprocess_dataset(df: pd.DataFrame):
     """
     Clean reviews and encode sentiment.
-    All columns are returned as standard Python/NumPy types to avoid
-    the PyArrow ChunkedArray indexing error in newer pandas versions.
+    Columns are cast to plain NumPy types to avoid the PyArrow
+    ChunkedArray indexing error in newer pandas versions.
     """
     df = df.copy()
     df.columns = [c.lower().strip() for c in df.columns]
 
-    # Encode sentiment → plain int (no Arrow dtype)
     df["sentiment_label"] = (
         df["sentiment"].str.lower().str.strip()
         .map({"positive": 1, "negative": 0})
-        .astype("int64")          # explicit NumPy int, never ArrowDtype
+        .astype("int64")
     )
     df = df.dropna(subset=["review", "sentiment_label"]).reset_index(drop=True)
 
@@ -184,16 +224,16 @@ def plot_sentiment_dist(df: pd.DataFrame):
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
-for key in ("model_trained", "classifier", "vectorizer", "accuracy",
-            "report_df", "y_test", "y_pred", "processed_df"):
-    if key not in st.session_state:
-        st.session_state[key] = None
+for _key in ("model_trained", "classifier", "vectorizer", "accuracy",
+             "report_df", "y_test", "y_pred", "processed_df"):
+    if _key not in st.session_state:
+        st.session_state[_key] = None
 
 st.session_state.setdefault("model_trained", False)
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # HEADER
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="main-header">🎬 IMDB Sentiment Analyzer</div>',
             unsafe_allow_html=True)
 st.markdown(
@@ -203,9 +243,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SIDEBAR — Configuration
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# SIDEBAR
+# ═════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.header("⚙️ Configuration")
 
@@ -224,7 +264,7 @@ with st.sidebar:
     )
 
     st.subheader("3 · Train / Test Split")
-    test_size = st.slider("Test set size (%)", 10, 40, 20, step=5)
+    test_size    = st.slider("Test set size (%)", 10, 40, 20, step=5)
     random_state = st.number_input(
         "Random seed", min_value=0, max_value=999, value=42, step=1
     )
@@ -244,26 +284,26 @@ with st.sidebar:
 
     train_button = st.button("🚀 Train Model", use_container_width=True)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# MAIN TABS
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# TABS
+# ═════════════════════════════════════════════════════════════════════════════
 tab_train, tab_predict, tab_guide = st.tabs(
     ["📊 Train & Evaluate", "🔮 Predict Sentiment", "📖 How It Works"]
 )
 
-# ────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # TAB 1 — Train & Evaluate
-# ────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 with tab_train:
     if not uploaded_file:
         st.info("⬅️ Upload your IMDB CSV file in the sidebar to get started.")
         st.stop()
 
-    # Load — dtype=str prevents pandas from choosing Arrow-backed types
+    # Load CSV — dtype=str prevents pandas choosing Arrow-backed dtypes
     try:
         df_raw = pd.read_csv(uploaded_file, dtype=str)
-    except Exception as e:
-        st.error(f"Could not read file: {e}")
+    except Exception as exc:
+        st.error(f"Could not read file: {exc}")
         st.stop()
 
     df_raw.columns = [c.lower().strip() for c in df_raw.columns]
@@ -285,18 +325,14 @@ with tab_train:
         df_raw = df_raw.sample(n=sample_size, random_state=42).reset_index(drop=True)
         st.caption(f"Using a random sample of **{sample_size:,}** rows.")
 
-    # ── Train ─────────────────────────────────────────────────────────────
+    # ── Train ──────────────────────────────────────────────────────────────
     if train_button:
         st.session_state["model_trained"] = False
 
         df_clean = preprocess_dataset(df_raw)
         st.session_state["processed_df"] = df_clean
 
-        # ╔══════════════════════════════════════════════════════════════╗
-        # ║  KEY FIX — convert to plain NumPy arrays via .tolist()      ║
-        # ║  This eliminates the PyArrow ChunkedArray __getitem__ error ║
-        # ║  triggered by scikit-learn's _safe_indexing on newer pandas ║
-        # ╚══════════════════════════════════════════════════════════════╝
+        # Convert to plain NumPy arrays — fixes PyArrow ChunkedArray error
         X = np.array(df_clean["clean_review"].tolist())
         y = np.array(df_clean["sentiment_label"].tolist(), dtype=np.int64)
 
@@ -307,18 +343,15 @@ with tab_train:
             stratify=y,
         )
 
-        # Vectorize
         with st.spinner(f"Vectorizing with {vec_choice}…"):
-            vectorizer = build_vectorizer(vec_choice, max_features)
+            vectorizer  = build_vectorizer(vec_choice, max_features)
             X_train_vec = vectorizer.fit_transform(X_train)
             X_test_vec  = vectorizer.transform(X_test)
 
-        # Train
         with st.spinner("Training BernoulliNB…"):
             clf = BernoulliNB(alpha=alpha)
             clf.fit(X_train_vec, y_train)
 
-        # Evaluate
         y_pred    = clf.predict(X_test_vec)
         acc       = accuracy_score(y_test, y_pred)
         report    = classification_report(
@@ -337,10 +370,9 @@ with tab_train:
             "y_test":        y_test,
             "y_pred":        y_pred,
         })
-
         st.success("✅ Model trained successfully!")
 
-    # ── Results ───────────────────────────────────────────────────────────
+    # ── Results ────────────────────────────────────────────────────────────
     if st.session_state["model_trained"]:
         acc       = st.session_state["accuracy"]
         report_df = st.session_state["report_df"]
@@ -386,22 +418,20 @@ with tab_train:
             st.pyplot(plot_confusion_matrix(y_test, y_pred))
 
         with st.expander("ℹ️ Training Configuration Summary"):
-            train_samples = int(
-                len(y_test) / (test_size / 100) * (1 - test_size / 100)
-            )
+            train_n = int(len(y_test) / (test_size / 100) * (1 - test_size / 100))
             st.json({
                 "vectorizer":    vec_choice,
                 "max_features":  max_features,
                 "test_size_pct": test_size,
                 "random_state":  int(random_state),
                 "nb_alpha":      alpha,
-                "train_samples": train_samples,
+                "train_samples": train_n,
                 "test_samples":  int(len(y_test)),
             })
 
-# ────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # TAB 2 — Predict
-# ────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 with tab_predict:
     st.subheader("🔮 Predict Sentiment of a New Review")
 
@@ -435,11 +465,11 @@ with tab_predict:
 
                 col_res, col_prob = st.columns([1, 2])
                 with col_res:
-                    badge_class = "positive-badge" if prediction == 1 else "negative-badge"
-                    badge_text  = "😊 POSITIVE"    if prediction == 1 else "😞 NEGATIVE"
+                    badge_cls  = "positive-badge" if prediction == 1 else "negative-badge"
+                    badge_text = "😊 POSITIVE"    if prediction == 1 else "😞 NEGATIVE"
                     st.markdown(
                         f'<div style="text-align:center;padding:2rem 0">'
-                        f'<span class="{badge_class}">{badge_text}</span>'
+                        f'<span class="{badge_cls}">{badge_text}</span>'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
@@ -487,7 +517,6 @@ with tab_predict:
                 st.error("Batch CSV must have a 'review' column.")
             else:
                 with st.spinner("Running batch predictions…"):
-                    # Use plain list — avoids Arrow indexing issues
                     clean_reviews = [
                         clean_text(r) for r in batch_df["review"].tolist()
                     ]
@@ -508,16 +537,16 @@ with tab_predict:
                     mime="text/csv",
                 )
 
-# ────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # TAB 3 — How It Works
-# ────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 with tab_guide:
     st.subheader("📖 How This App Works")
 
     steps = [
         ("1 · Upload Dataset",
          "Upload a CSV with <b>review</b> (text) and <b>sentiment</b> "
-         "(positive/negative) columns."),
+         "(positive/negative) columns. The IMDB 50K dataset from Kaggle works out of the box."),
         ("2 · Data Preprocessing",
          "HTML tags are stripped, non-alphabetic characters removed, text lowercased, "
          "English stopwords dropped, and each word is reduced to its root via <b>Porter Stemming</b>."),
@@ -529,13 +558,13 @@ with tab_guide:
          "<b>TF-IDF</b> additionally down-weights common words and up-weights rare informative ones."),
         ("5 · BernoulliNB Classifier",
          "A Bernoulli Naïve Bayes model is trained on the vectorized data. "
-         "It works excellently for sentiment classification."),
+         "It works excellently for text sentiment classification."),
         ("6 · Evaluation",
-         "Accuracy, precision, recall, F1-score per class, and confusion matrix are shown "
+         "Accuracy, precision, recall, F1-score per class, and the confusion matrix are shown "
          "on the unseen test set."),
         ("7 · Predict",
          "Type any review in the <b>Predict</b> tab to get <b>Positive / Negative</b> "
-         "with confidence probabilities."),
+         "with confidence probabilities. Batch CSV prediction is also supported."),
     ]
 
     for title, body in steps:
@@ -550,12 +579,17 @@ with tab_guide:
         "- Use the full 50K dataset (uncheck *Use a subset*).  \n"
         "- Try TF-IDF with 20K–30K features.  \n"
         "- Keep test split at 20–30%.  \n"
-        "- BernoulliNB `alpha=1.0` is a solid default."
+        "- BernoulliNB `alpha=1.0` (Laplace smoothing) is a solid default."
     )
+
     st.markdown("---")
     st.markdown(
-        "**Install dependencies:**  \n"
-        "```\npip install streamlit pandas numpy scikit-learn nltk matplotlib seaborn\n```\n\n"
-        "**Run:**  \n"
-        "```\nstreamlit run imdb_sentiment_app.py\n```"
+        "**Deploying to Streamlit Cloud?**  \n"
+        "Push both `imdb_sentiment_app.py` and `requirements.txt` to your GitHub repo, "
+        "then connect the repo at [share.streamlit.io](https://share.streamlit.io). "
+        "Streamlit Cloud will install all packages from `requirements.txt` automatically."
+    )
+    st.markdown(
+        "**Run locally:**  \n"
+        "```\npip install -r requirements.txt\nstreamlit run imdb_sentiment_app.py\n```"
     )
